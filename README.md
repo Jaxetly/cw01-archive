@@ -82,7 +82,7 @@ python3 scripts/check_api.py "$gateway_url"
 
 ```sh
 curl -i -X POST "$gateway_url/tasks" -H 'Content-Type: application/json' \
-  -d '{"name":"missing.txt","url":"https://httpbingo.org/status/404"}'
+  -d '{"name":"missing.txt","url":"https://httpbin.org/status/404"}'
 ```
 
 Параметр `force_destroy` позволяет удалить выделенный стенд вместе со всеми объектами созданного бакета. После удаления список ресурсов в state должен быть пуст.

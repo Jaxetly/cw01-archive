@@ -12,7 +12,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
-SOURCE_URL = "https://httpbingo.org/base64/Y2xvdWQtYXJjaGl2ZS1jaGVjawo="
+SOURCE_URL = "https://www.rfc-editor.org/rfc/rfc1149.txt"
 MISSING_KEY = "00000000-0000-7000-8000-000000000000.zip"
 
 
