@@ -19,7 +19,9 @@
 
 ## Развёртывание инфраструктуры
 
-Нужны Terraform 1.6 или новее, Python 3.8 или новее для служебных скриптов, настроенный `yc` и права на создание ресурсов и назначение ролей в учебном каталоге. Облачная функция запускается в среде Python 3.14. Выполняйте команды из корня репозитория в Bash или Zsh. Подставьте свои три значения. Имя бакета должно быть глобально уникальным, начинаться с `vvotNN-` и принадлежать новому стенду. Оно также определяет префикс остальных ресурсов.
+Нужны Terraform версии 1.x начиная с 1.6, Python 3.8 или новее для служебных скриптов и настроенный `yc`. Аккаунту Yandex Cloud нужны права создавать ресурсы, назначать роли и использовать сервисные аккаунты в выбранном каталоге. Облачная функция запускается в среде Python 3.14.
+
+Если CLI ещё не настроен, запустите `yc init` и выберите своё облако и каталог. Команды ниже выполняйте из корня репозитория в Bash или Zsh. Первые две команды берут идентификаторы из текущего профиля `yc`. В имени бакета замените `00` на двузначный номер своего каталога. Имя должно быть глобально уникальным и определяет префикс остальных ресурсов. [Настройка `yc`](https://yandex.cloud/ru/docs/cli/quickstart)
 
 | Параметр | Назначение |
 |---|---|
@@ -29,9 +31,9 @@
 | `YC_TOKEN` | Временный токен вызывающего пользователя. Yandex-провайдер и Document API читают его из окружения |
 
 ```sh
-export TF_VAR_cloud_id="<id облака>"
-export TF_VAR_folder_id="<id каталога>"
-export TF_VAR_bucket_name="vvot00-archive-example"
+export TF_VAR_cloud_id="$(yc config get cloud-id)"
+export TF_VAR_folder_id="$(yc config get folder-id)"
+export TF_VAR_bucket_name="vvot00-archive-$(date +%s)"
 
 YC_TOKEN="$(yc iam create-token)" && export YC_TOKEN
 ```
@@ -43,6 +45,26 @@ mkdir -p "$state_dir"
 state_file="$state_dir/terraform.tfstate"
 
 terraform -chdir=terraform init
+```
+
+Если провайдер не скачивается напрямую из Terraform Registry, повторите `init` через официальное зеркало Yandex Cloud. Файл настроек используется только для этой команды. [Установка провайдера через зеркало](https://yandex.cloud/ru/docs/ydb/terraform/install) · [Настройки Terraform CLI](https://developer.hashicorp.com/terraform/cli/config/config-file)
+
+```sh
+cat > "$state_dir/providers.tfrc" <<'EOF'
+provider_installation {
+  network_mirror {
+    url     = "https://terraform-mirror.yandexcloud.net/"
+    include = ["registry.terraform.io/yandex-cloud/yandex"]
+  }
+  direct {
+    exclude = ["registry.terraform.io/yandex-cloud/yandex"]
+  }
+}
+EOF
+TF_CLI_CONFIG_FILE="$state_dir/providers.tfrc" terraform -chdir=terraform init
+```
+
+```sh
 terraform -chdir=terraform fmt -check
 terraform -chdir=terraform validate
 terraform -chdir=terraform plan -state="$state_file"
@@ -76,16 +98,16 @@ gateway_url="$(terraform -chdir=terraform output -state="$state_file" -raw gatew
 python3 scripts/check_api.py "$gateway_url"
 ```
 
-Скрипт проверяет `400` для некорректного задания и `404` для отсутствующего архива. Затем он отправляет задачу, ждёт запись в YDB, открывает карточку, скачивает ZIP и сравнивает его содержимое с исходными байтами. Можно передать свой небольшой публичный файл через `--source-url`.
+Скрипт проверяет `400` для некорректного задания и `404` для отсутствующего архива. Затем он отправляет задачу, ждёт запись в YDB, открывает карточку, скачивает ZIP и сравнивает его содержимое с исходными байтами. Можно передать свой небольшой публичный файл через `--source-url`. При первом запуске триггер может начать обработку в течение пяти минут после создания. Если проверка завершилась по таймауту ожидания записи, повторите её после запуска триггера. [Запуск триггера](https://yandex.cloud/ru/docs/functions/operations/trigger/ymq-trigger-create)
 
-Для проверки DLQ отправьте отдельное задание с недоступным источником и дождитесь его появления в очереди необработанных сообщений. С таймаутом видимости **900 с** перенос может занять около 15 минут.
+Для проверки DLQ отправьте отдельное задание с недоступным источником. В консоли Yandex Cloud откройте выбранный каталог → **Message Queue** и проверьте колонку **Сообщений в очереди** у очереди с суффиксом `-dlq`. С таймаутом видимости **900 с** перенос может занять около 15 минут. [Просмотр количества сообщений](https://yandex.cloud/ru/docs/message-queue/operations/message-queue-receive-and-delete-message)
 
 ```sh
 curl -i -X POST "$gateway_url/tasks" -H 'Content-Type: application/json' \
   -d '{"name":"missing.txt","url":"https://httpbin.org/status/404"}'
 ```
 
-Параметр `force_destroy` позволяет удалить выделенный стенд вместе со всеми объектами созданного бакета. После удаления список ресурсов в state должен быть пуст.
+Для удаления используйте те же входные значения и тот же `state_file`. Если IAM-токен устарел, получите свежий командой `YC_TOKEN="$(yc iam create-token)" && export YC_TOKEN`. Параметр `force_destroy` позволяет удалить выделенный стенд вместе со всеми объектами созданного бакета. После удаления список ресурсов в state должен быть пуст.
 
 ```sh
 terraform -chdir=terraform destroy -state="$state_file"
