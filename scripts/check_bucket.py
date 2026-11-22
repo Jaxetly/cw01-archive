@@ -7,12 +7,14 @@ import io
 import os
 import re
 import sys
+import time
 import uuid
 import zipfile
 
 
 HOST = "storage.yandexcloud.net"
 TIMEOUT_SECONDS = 15
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 ENTRY_NAME = "check.txt"
 ENTRY_CONTENT = b"Archive storage check\n"
 
@@ -29,19 +31,26 @@ def storage_request(method, path, expected_status, *, token=None, data=None, lim
         headers["Content-Type"] = "application/zip"
 
     operation = f"{method} ({'с IAM-токеном' if token else 'без авторизации'})"
-    connection = http.client.HTTPSConnection(HOST, timeout=TIMEOUT_SECONDS)
-    try:
-        connection.request(method, path, body=data, headers=headers)
-        with connection.getresponse() as response:
-            if response.status != expected_status:
-                raise CheckError(
+    # Повтор PUT использует тот же уникальный ключ и те же байты.
+    for delay in (1, 2, 0):
+        connection = http.client.HTTPSConnection(HOST, timeout=TIMEOUT_SECONDS)
+        try:
+            connection.request(method, path, body=data, headers=headers)
+            with connection.getresponse() as response:
+                if response.status == expected_status:
+                    return response.read(limit) if limit else b""
+                error = CheckError(
                     f"{operation}: ожидался HTTP {expected_status}, получен {response.status}"
                 )
-            return response.read(limit) if limit else b""
-    except (OSError, ValueError, http.client.HTTPException):
-        raise CheckError(f"{operation}: не удалось обменяться данными с Object Storage") from None
-    finally:
-        connection.close()
+                if response.status not in RETRYABLE_STATUS:
+                    raise error
+        except (OSError, http.client.HTTPException):
+            error = CheckError(f"{operation}: не удалось обменяться данными с Object Storage")
+        finally:
+            connection.close()
+        if delay == 0:
+            raise error from None
+        time.sleep(delay)
 
 
 def check_bucket(bucket_name, token):
