@@ -1,0 +1,169 @@
+openapi: 3.0.0
+info:
+  title: Система архивирования файлов
+  version: '1.0.0'
+
+x-yc-apigateway:
+  service_account_id: '${service_account_id}'
+
+paths:
+  /tasks:
+    post:
+      operationId: createTask
+      summary: Поставить задание в очередь
+      x-yc-apigateway-validator:
+        validateRequestBody: true
+        validationErrorHandler:
+          statusCode: 400
+          x-yc-apigateway-integration:
+            type: dummy
+            http_code: 200
+            http_headers:
+              Content-Type: application/json
+            content:
+              '*': '{"message":"Expected a file name and an HTTP(S) URL"}'
+      x-yc-apigateway-integration:
+        type: cloud_ymq
+        action: SendMessage
+        folder_id: '${folder_id}'
+        queue_url: '${queue_url}'
+        payload_format_type: body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Task'
+      responses:
+        '200':
+          description: Внутренний ответ SendMessage, который шлюз выдаёт с кодом 202
+          x-yc-status-mapping: 202
+        '202':
+          description: Задание принято в очередь
+        '400':
+          description: Тело запроса не прошло проверку
+
+  /archives:
+    get:
+      operationId: listArchives
+      summary: Получить список архивов
+      x-yc-apigateway-integration:
+        type: cloud_ydb
+        action: Scan
+        database: '${database_path}'
+        table_name: '${table_name}'
+      responses:
+        '200':
+          description: Список архивов
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Archive'
+
+  /archives/{key}:
+    get:
+      operationId: getArchive
+      summary: Получить метаданные архива
+      parameters:
+        - $ref: '#/components/parameters/ArchiveKey'
+      x-yc-apigateway-validator:
+        $ref: '#/components/x-yc-apigateway-validators/ArchiveKey'
+      x-yc-apigateway-integration:
+        type: cloud_ydb
+        action: GetItem
+        database: '${database_path}'
+        table_name: '${table_name}'
+        key: '{"key":"{key}"}'
+      responses:
+        '200':
+          description: Метаданные архива
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Archive'
+        '404':
+          description: Архив не найден
+
+  /download/{key}:
+    get:
+      operationId: downloadArchive
+      summary: Скачать ZIP-архив
+      parameters:
+        - $ref: '#/components/parameters/ArchiveKey'
+      x-yc-apigateway-validator:
+        $ref: '#/components/x-yc-apigateway-validators/ArchiveKey'
+      x-yc-apigateway-integration:
+        type: object_storage
+        bucket: '${bucket_name}'
+        object: '{key}'
+      responses:
+        '200':
+          description: Содержимое ZIP-архива
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Архив не найден
+
+components:
+  parameters:
+    ArchiveKey:
+      name: key
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ArchiveKey'
+
+  x-yc-apigateway-validators:
+    ArchiveKey:
+      validateRequestParameters: true
+      validationErrorHandler:
+        statusCode: 404
+        x-yc-apigateway-integration:
+          type: dummy
+          http_code: 200
+          http_headers:
+            Content-Type: application/json
+          content:
+            '*': '{"message":"Archive not found"}'
+
+  schemas:
+    ArchiveKey:
+      type: string
+      pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}[.]zip$'
+    FileName:
+      type: string
+      minLength: 1
+      maxLength: 255
+      allOf:
+        - pattern: '^[^/\\:\x00-\x1f\x7f]+$'
+        - pattern: '\S'
+        - not:
+            enum: ['.', '..']
+    SourceURL:
+      type: string
+      maxLength: 2048
+      pattern: '^[Hh][Tt][Tt][Pp][Ss]?://[^/\s?#@]+([/?#][^\s]*)?$'
+    Task:
+      type: object
+      required: [name, url]
+      additionalProperties: false
+      properties:
+        name:
+          $ref: '#/components/schemas/FileName'
+        url:
+          $ref: '#/components/schemas/SourceURL'
+    Archive:
+      type: object
+      required: [name, url, key]
+      properties:
+        name:
+          $ref: '#/components/schemas/FileName'
+        url:
+          $ref: '#/components/schemas/SourceURL'
+        key:
+          $ref: '#/components/schemas/ArchiveKey'
